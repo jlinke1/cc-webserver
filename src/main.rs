@@ -34,7 +34,7 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
 
     match path {
         "/" => write_response(stream, "200 OK")?,
-        _ => write_response(stream, "404 NOT FOUND")?,
+        _ => write_response(stream, "404 Not Found")?,
     }
     // stream.write_all(status_line)?;
 
