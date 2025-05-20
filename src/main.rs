@@ -46,7 +46,7 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
 }
 
 fn write_response(mut stream: TcpStream, status: &str, body: Option<&str>) -> io::Result<()> {
-    let status_line = format!("HTTP/1.1 {}\r\n\r\n", status);
+    let status_line = format!("HTTP/1.1 {}\r\n", status);
     stream.write_all(status_line.as_bytes())?;
 
     if let Some(txt) = body {
@@ -56,6 +56,8 @@ fn write_response(mut stream: TcpStream, status: &str, body: Option<&str>) -> io
         );
         stream.write_all(headers.as_bytes())?;
         stream.write_all(txt.as_bytes())?;
+        stream.write_all("\r\n".as_bytes())?;
+    } else {
         stream.write_all("\r\n".as_bytes())?;
     }
     stream.flush()?;
