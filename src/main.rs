@@ -27,14 +27,16 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
     let mut line = String::new();
     reader.read_line(&mut line)?;
-    println!("first line: {}", line);
     let request_line_parts: Vec<_> = line.split(" ").collect();
     let path = request_line_parts[1];
-    println!("path: {}", path);
 
     match path {
-        "/" => write_response(stream, "200 OK")?,
-        _ => write_response(stream, "404 Not Found")?,
+        "/" => write_response(stream, "200 OK", None)?,
+        s if s.starts_with("/echo/") => {
+            let resp_echo = s.strip_prefix("/echo/");
+            write_response(stream, "200 OK", resp_echo)?
+        }
+        _ => write_response(stream, "404 Not Found", None)?,
     }
     // stream.write_all(status_line)?;
 
@@ -43,9 +45,19 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
     Ok(())
 }
 
-fn write_response(mut stream: TcpStream, status: &str) -> io::Result<()> {
+fn write_response(mut stream: TcpStream, status: &str, body: Option<&str>) -> io::Result<()> {
     let status_line = format!("HTTP/1.1 {}\r\n\r\n", status);
     stream.write_all(status_line.as_bytes())?;
+
+    if let Some(txt) = body {
+        let headers = format!(
+            "Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+            txt.len()
+        );
+        stream.write_all(headers.as_bytes())?;
+        stream.write_all(txt.as_bytes())?;
+        stream.write_all("\r\n".as_bytes())?;
+    }
     stream.flush()?;
 
     Ok(())
