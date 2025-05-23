@@ -1,7 +1,10 @@
-use std::io::{self, BufRead, Write};
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
+use std::{
+    collections::HashMap,
+    io::{self, BufRead, Write},
+};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -25,10 +28,23 @@ fn main() {
 /// Handles incoming connections by responding with a 200 status code.
 fn handle_connection(stream: TcpStream) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let request_line_parts: Vec<_> = line.split(" ").collect();
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line)?;
+    let request_line_parts: Vec<_> = request_line.split(" ").collect();
     let path = request_line_parts[1];
+
+    let mut request_headers: HashMap<String, String> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        let mut parts = line.splitn(2, ":");
+        if let (Some(name), Some(value)) = (parts.next(), parts.next()) {
+            println!("{}: {}", name, value);
+            request_headers.insert(name.to_string(), value.trim().to_string());
+        } else {
+            break;
+        }
+    }
 
     match path {
         "/" => write_response(stream, "200 OK", None)?,
@@ -36,11 +52,13 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
             let resp_echo = s.strip_prefix("/echo/");
             write_response(stream, "200 OK", resp_echo)?
         }
+        "/user-agent" => write_response(
+            stream,
+            "200 OK",
+            request_headers.get("User-Agent").map(|s| s.as_str()),
+        )?,
         _ => write_response(stream, "404 Not Found", None)?,
     }
-    // stream.write_all(status_line)?;
-
-    // stream.flush()?;
 
     Ok(())
 }
