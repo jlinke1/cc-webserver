@@ -16,6 +16,8 @@ fn main() {
     for stream in listener.incoming() {
         let stream = stream.unwrap();
 
+        // we should be using a threadpool instead of creating a new thread for each connection.
+        // See https://doc.rust-lang.org/book/ch21-02-multithreaded.html for how to implement one
         thread::spawn(|| {
             handle_connection(stream).unwrap();
         });
