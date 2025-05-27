@@ -1,31 +1,41 @@
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
-use std::thread;
 use std::{
     collections::HashMap,
+    env,
     io::{self, BufRead, Write},
 };
+use std::{fs, thread};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
+    let args: Vec<String> = env::args().collect();
+
+    let mut directory = String::new();
+    for i in 0..args.len() {
+        if args[i] == "--directory" && i + 1 < args.len() {
+            directory = args[i + 1].clone()
+        }
+    }
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
 
     for stream in listener.incoming() {
         let stream = stream.unwrap();
+        let dir = directory.clone();
 
         // we should be using a threadpool instead of creating a new thread for each connection.
         // See https://doc.rust-lang.org/book/ch21-02-multithreaded.html for how to implement one
-        thread::spawn(|| {
-            handle_connection(stream).unwrap();
+        thread::spawn(move || {
+            handle_connection(stream, dir).unwrap();
         });
     }
 }
 
 /// Handles incoming connections by responding with a 200 status code.
-fn handle_connection(stream: TcpStream) -> io::Result<()> {
+fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -46,32 +56,54 @@ fn handle_connection(stream: TcpStream) -> io::Result<()> {
     }
 
     match path {
-        "/" => write_response(stream, "200 OK", None)?,
+        "/" => write_response(stream, "200 OK", None, vec![])?,
         s if s.starts_with("/echo/") => {
             let resp_echo = s.strip_prefix("/echo/");
-            write_response(stream, "200 OK", resp_echo)?
+            write_response(stream, "200 OK", resp_echo, vec![])?
         }
         "/user-agent" => write_response(
             stream,
             "200 OK",
             request_headers.get("User-Agent").map(|s| s.as_str()),
+            vec![],
         )?,
-        _ => write_response(stream, "404 Not Found", None)?,
+        s if s.starts_with("/files/") => {
+            let fp = s.strip_prefix("/files/").unwrap();
+
+            match fs::read_to_string(format!("{}/{}", directory, fp)) {
+                Ok(contents) => write_response(
+                    stream,
+                    "200 OK",
+                    Some(&contents),
+                    vec!["Content-Type: application/octet-stream\r\n"],
+                )?,
+                Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
+            }
+        }
+        _ => write_response(stream, "404 Not Found", None, vec![])?,
     }
 
     Ok(())
 }
 
-fn write_response(mut stream: TcpStream, status: &str, body: Option<&str>) -> io::Result<()> {
+fn write_response(
+    mut stream: TcpStream,
+    status: &str,
+    body: Option<&str>,
+    headers: Vec<&str>,
+) -> io::Result<()> {
     let status_line = format!("HTTP/1.1 {}\r\n", status);
     stream.write_all(status_line.as_bytes())?;
 
     if let Some(txt) = body {
-        let headers = format!(
-            "Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
-            txt.len()
-        );
-        stream.write_all(headers.as_bytes())?;
+        stream.write_all(
+            format!(
+                "{}Content-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                headers.join(""),
+                txt.len()
+            )
+            .as_bytes(),
+        )?;
         stream.write_all(txt.as_bytes())?;
         stream.write_all("\r\n".as_bytes())?;
     } else {
