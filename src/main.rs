@@ -1,3 +1,4 @@
+use std::io::Read;
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
@@ -34,26 +35,29 @@ fn main() {
     }
 }
 
+fn get_body(
+    reader: &mut io::BufReader<&TcpStream>,
+    content_length_header: Option<&String>,
+) -> io::Result<String> {
+    let content_length = content_length_header
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body_bytes = vec![0u8; content_length];
+    reader.read_exact(&mut body_bytes)?;
+    Ok(String::from_utf8_lossy(&body_bytes).to_string())
+}
 /// Handles incoming connections by responding with a 200 status code.
 fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
     let request_line_parts: Vec<_> = request_line.split(" ").collect();
+    let method = request_line_parts[0];
     let path = request_line_parts[1];
 
-    let mut request_headers: HashMap<String, String> = HashMap::new();
+    let request_headers = parse_headers(&mut reader)?;
 
-    for line in reader.lines() {
-        let line = line?;
-        let mut parts = line.splitn(2, ":");
-        if let (Some(name), Some(value)) = (parts.next(), parts.next()) {
-            println!("{}: {}", name, value);
-            request_headers.insert(name.to_string(), value.trim().to_string());
-        } else {
-            break;
-        }
-    }
+    let body = get_body(&mut reader, request_headers.get("Content-Length"))?;
 
     match path {
         "/" => write_response(stream, "200 OK", None, vec![])?,
@@ -68,16 +72,26 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
             vec![],
         )?,
         s if s.starts_with("/files/") => {
-            let fp = s.strip_prefix("/files/").unwrap();
+            let file_name = s.strip_prefix("/files/").unwrap();
+            let fp = format!("{}/{}", directory, file_name);
 
-            match fs::read_to_string(format!("{}/{}", directory, fp)) {
-                Ok(contents) => write_response(
-                    stream,
-                    "200 OK",
-                    Some(&contents),
-                    vec!["Content-Type: application/octet-stream\r\n"],
-                )?,
-                Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
+            match method {
+                "GET" => match fs::read_to_string(fp) {
+                    Ok(contents) => write_response(
+                        stream,
+                        "200 OK",
+                        Some(&contents),
+                        vec!["Content-Type: application/octet-stream\r\n"],
+                    )?,
+                    Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
+                },
+                "POST" => {
+                    println!("body: {}", body);
+                    fs::write(fp, body.to_string())?;
+                    println!("wrote new file");
+                    write_response(stream, "201 Created", None, vec![])?
+                }
+                _ => write_response(stream, "404 Not Found", None, vec![])?,
             }
         }
         _ => write_response(stream, "404 Not Found", None, vec![])?,
@@ -112,4 +126,24 @@ fn write_response(
     stream.flush()?;
 
     Ok(())
+}
+
+fn parse_headers(reader: &mut io::BufReader<&TcpStream>) -> io::Result<HashMap<String, String>> {
+    let mut request_headers: HashMap<String, String> = HashMap::new();
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        reader.read_line(&mut line)?;
+        if line == "\r\n" {
+            break;
+        }
+        let mut parts = line.splitn(2, ":");
+        if let (Some(name), Some(value)) = (parts.next(), parts.next()) {
+            println!("{}: {}", name, value);
+            request_headers.insert(name.to_string(), value.trim().to_string());
+        }
+    }
+
+    Ok(request_headers)
 }
