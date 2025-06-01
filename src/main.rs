@@ -52,7 +52,7 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                 .unwrap_or_default();
 
             let mut response_headers = vec![];
-            if requested_encoding == "gzip" {
+            if requested_encoding.contains("gzip") {
                 response_headers.push("Content-Encoding: gzip\r\n")
             }
 
