@@ -35,47 +35,40 @@ fn main() {
     }
 }
 
-fn get_body(
-    reader: &mut io::BufReader<&TcpStream>,
-    content_length_header: Option<&String>,
-) -> io::Result<String> {
-    let content_length = content_length_header
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-    let mut body_bytes = vec![0u8; content_length];
-    reader.read_exact(&mut body_bytes)?;
-    Ok(String::from_utf8_lossy(&body_bytes).to_string())
-}
 /// Handles incoming connections by responding with a 200 status code.
 fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    let request_line_parts: Vec<_> = request_line.split(" ").collect();
-    let method = request_line_parts[0];
-    let path = request_line_parts[1];
+    let request = parse_request(&mut reader)?;
 
-    let request_headers = parse_headers(&mut reader)?;
-
-    let body = get_body(&mut reader, request_headers.get("Content-Length"))?;
-
-    match path {
+    match request.path.as_str() {
         "/" => write_response(stream, "200 OK", None, vec![])?,
         s if s.starts_with("/echo/") => {
             let resp_echo = s.strip_prefix("/echo/");
-            write_response(stream, "200 OK", resp_echo, vec![])?
+
+            let requested_encoding = request
+                .headers
+                .get("Accept-Encoding")
+                .map(|s| s.as_str())
+                .unwrap_or_default();
+
+            let mut response_headers = vec![];
+            if requested_encoding == "gzip" {
+                response_headers.push("Content-Encoding: gzip\r\n")
+            }
+
+            write_response(stream, "200 OK", resp_echo, response_headers)?
         }
         "/user-agent" => write_response(
             stream,
             "200 OK",
-            request_headers.get("User-Agent").map(|s| s.as_str()),
+            request.headers.get("User-Agent").map(|s| s.as_str()),
             vec![],
         )?,
         s if s.starts_with("/files/") => {
             let file_name = s.strip_prefix("/files/").unwrap();
             let fp = format!("{}/{}", directory, file_name);
 
-            match method {
+            match request.method.as_str() {
                 "GET" => match fs::read_to_string(fp) {
                     Ok(contents) => write_response(
                         stream,
@@ -86,8 +79,8 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                     Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
                 },
                 "POST" => {
-                    println!("body: {}", body);
-                    fs::write(fp, body.to_string())?;
+                    println!("body: {}", request.body);
+                    fs::write(fp, request.body)?;
                     println!("wrote new file");
                     write_response(stream, "201 Created", None, vec![])?
                 }
@@ -128,6 +121,23 @@ fn write_response(
     Ok(())
 }
 
+fn parse_request(reader: &mut io::BufReader<&TcpStream>) -> io::Result<Request> {
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line)?;
+    let request_line_parts: Vec<_> = request_line.split_whitespace().collect();
+
+    let headers = parse_headers(reader)?;
+
+    let body = get_body(reader, headers.get("Content-Length"))?;
+
+    Ok(Request {
+        method: request_line_parts[0].to_string(),
+        path: request_line_parts[1].to_string(),
+        headers,
+        body,
+    })
+}
+
 fn parse_headers(reader: &mut io::BufReader<&TcpStream>) -> io::Result<HashMap<String, String>> {
     let mut request_headers: HashMap<String, String> = HashMap::new();
     let mut line = String::new();
@@ -146,4 +156,23 @@ fn parse_headers(reader: &mut io::BufReader<&TcpStream>) -> io::Result<HashMap<S
     }
 
     Ok(request_headers)
+}
+
+fn get_body(
+    reader: &mut io::BufReader<&TcpStream>,
+    content_length_header: Option<&String>,
+) -> io::Result<String> {
+    let content_length = content_length_header
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body_bytes = vec![0u8; content_length];
+    reader.read_exact(&mut body_bytes)?;
+    Ok(String::from_utf8_lossy(&body_bytes).to_string())
+}
+
+struct Request {
+    path: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: String,
 }
