@@ -9,6 +9,9 @@ use std::{
 };
 use std::{fs, thread};
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -43,8 +46,6 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
     match request.path.as_str() {
         "/" => write_response(stream, "200 OK", None, vec![])?,
         s if s.starts_with("/echo/") => {
-            let resp_echo = s.strip_prefix("/echo/");
-
             let requested_encoding = request
                 .headers
                 .get("Accept-Encoding")
@@ -52,16 +53,19 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                 .unwrap_or_default();
 
             let mut response_headers = vec![];
-            if requested_encoding.contains("gzip") {
-                response_headers.push("Content-Encoding: gzip\r\n")
-            }
+            let resp_echo = if requested_encoding.contains("gzip") {
+                response_headers.push("Content-Encoding: gzip\r\n");
+                &compress_string(s.strip_prefix("/echo/").unwrap_or_default())?
+            } else {
+                s.strip_prefix("/echo/").unwrap_or_default().as_bytes()
+            };
 
-            write_response(stream, "200 OK", resp_echo, response_headers)?
+            write_response(stream, "200 OK", Some(resp_echo), response_headers)?
         }
         "/user-agent" => write_response(
             stream,
             "200 OK",
-            request.headers.get("User-Agent").map(|s| s.as_str()),
+            request.headers.get("User-Agent").map(|s| s.as_bytes()),
             vec![],
         )?,
         s if s.starts_with("/files/") => {
@@ -73,7 +77,7 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                     Ok(contents) => write_response(
                         stream,
                         "200 OK",
-                        Some(&contents),
+                        Some(contents.as_bytes()),
                         vec!["Content-Type: application/octet-stream\r\n"],
                     )?,
                     Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
@@ -96,7 +100,7 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
 fn write_response(
     mut stream: TcpStream,
     status: &str,
-    body: Option<&str>,
+    body: Option<&[u8]>,
     headers: Vec<&str>,
 ) -> io::Result<()> {
     let status_line = format!("HTTP/1.1 {}\r\n", status);
@@ -111,7 +115,7 @@ fn write_response(
             )
             .as_bytes(),
         )?;
-        stream.write_all(txt.as_bytes())?;
+        stream.write_all(txt)?;
         stream.write_all("\r\n".as_bytes())?;
     } else {
         stream.write_all("\r\n".as_bytes())?;
@@ -175,4 +179,10 @@ struct Request {
     method: String,
     headers: HashMap<String, String>,
     body: String,
+}
+
+fn compress_string(s: &str) -> io::Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(s.as_bytes())?;
+    encoder.finish()
 }
