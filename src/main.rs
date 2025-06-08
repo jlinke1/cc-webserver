@@ -1,5 +1,4 @@
 use std::io::Read;
-#[allow(unused_imports)]
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::{
@@ -41,64 +40,68 @@ fn main() {
 /// Handles incoming connections by responding with a 200 status code.
 fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
     let mut reader = io::BufReader::new(&stream);
-    let request = parse_request(&mut reader)?;
 
-    match request.path.as_str() {
-        "/" => write_response(stream, "200 OK", None, vec![])?,
-        s if s.starts_with("/echo/") => {
-            let requested_encoding = request
-                .headers
-                .get("Accept-Encoding")
-                .map(|s| s.as_str())
-                .unwrap_or_default();
+    loop {
+        let request = parse_request(&mut reader)?;
 
-            let mut response_headers = vec![];
-            let resp_echo = if requested_encoding.contains("gzip") {
-                response_headers.push("Content-Encoding: gzip\r\n");
-                &compress_string(s.strip_prefix("/echo/").unwrap_or_default())?
-            } else {
-                s.strip_prefix("/echo/").unwrap_or_default().as_bytes()
-            };
+        match request.path.as_str() {
+            "/" => write_response(&stream, "200 OK", None, vec![])?,
+            s if s.starts_with("/echo/") => {
+                let requested_encoding = request
+                    .headers
+                    .get("Accept-Encoding")
+                    .map(|s| s.as_str())
+                    .unwrap_or_default();
 
-            write_response(stream, "200 OK", Some(resp_echo), response_headers)?
-        }
-        "/user-agent" => write_response(
-            stream,
-            "200 OK",
-            request.headers.get("User-Agent").map(|s| s.as_bytes()),
-            vec![],
-        )?,
-        s if s.starts_with("/files/") => {
-            let file_name = s.strip_prefix("/files/").unwrap();
-            let fp = format!("{}/{}", directory, file_name);
+                let mut response_headers = vec![];
+                let resp_echo = if requested_encoding.contains("gzip") {
+                    response_headers.push("Content-Encoding: gzip\r\n");
+                    &compress_string(s.strip_prefix("/echo/").unwrap_or_default())?
+                } else {
+                    s.strip_prefix("/echo/").unwrap_or_default().as_bytes()
+                };
 
-            match request.method.as_str() {
-                "GET" => match fs::read_to_string(fp) {
-                    Ok(contents) => write_response(
-                        stream,
-                        "200 OK",
-                        Some(contents.as_bytes()),
-                        vec!["Content-Type: application/octet-stream\r\n"],
-                    )?,
-                    Err(_) => write_response(stream, "404 Not Found", None, vec![])?,
-                },
-                "POST" => {
-                    println!("body: {}", request.body);
-                    fs::write(fp, request.body)?;
-                    println!("wrote new file");
-                    write_response(stream, "201 Created", None, vec![])?
-                }
-                _ => write_response(stream, "404 Not Found", None, vec![])?,
+                write_response(&stream, "200 OK", Some(resp_echo), response_headers)?
             }
-        }
-        _ => write_response(stream, "404 Not Found", None, vec![])?,
-    }
+            "/user-agent" => write_response(
+                &stream,
+                "200 OK",
+                request.headers.get("User-Agent").map(|s| s.as_bytes()),
+                vec![],
+            )?,
+            s if s.starts_with("/files/") => {
+                let file_name = s.strip_prefix("/files/").unwrap();
+                let fp = format!("{}/{}", directory, file_name);
 
-    Ok(())
+                match request.method.as_str() {
+                    "GET" => match fs::read_to_string(fp) {
+                        Ok(contents) => write_response(
+                            &stream,
+                            "200 OK",
+                            Some(contents.as_bytes()),
+                            vec!["Content-Type: application/octet-stream\r\n"],
+                        )?,
+                        Err(_) => write_response(&stream, "404 Not Found", None, vec![])?,
+                    },
+                    "POST" => {
+                        println!("body: {}", request.body);
+                        fs::write(fp, request.body)?;
+                        println!("wrote new file");
+                        write_response(&stream, "201 Created", None, vec![])?
+                    }
+                    _ => write_response(&stream, "404 Not Found", None, vec![])?,
+                }
+            }
+            _ => write_response(&stream, "404 Not Found", None, vec![])?,
+        }
+        if request.headers.get("Connection") == Some(&"closed".to_string()) {
+            return Ok(());
+        }
+    }
 }
 
 fn write_response(
-    mut stream: TcpStream,
+    mut stream: &TcpStream,
     status: &str,
     body: Option<&[u8]>,
     headers: Vec<&str>,
@@ -116,7 +119,6 @@ fn write_response(
             .as_bytes(),
         )?;
         stream.write_all(txt)?;
-        stream.write_all("\r\n".as_bytes())?;
     } else {
         stream.write_all("\r\n".as_bytes())?;
     }
@@ -128,7 +130,8 @@ fn write_response(
 fn parse_request(reader: &mut io::BufReader<&TcpStream>) -> io::Result<Request> {
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
-    let request_line_parts: Vec<_> = request_line.split_whitespace().collect();
+    println!("request line {}", request_line);
+    let request_line_parts: Vec<_> = request_line.trim().split_whitespace().collect();
 
     let headers = parse_headers(reader)?;
 
