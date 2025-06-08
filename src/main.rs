@@ -43,9 +43,14 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
 
     loop {
         let request = parse_request(&mut reader)?;
+        let close_conn = request.headers.get("Connection") == Some(&"close".to_string());
+        let mut response_headers = vec![];
+        if close_conn {
+            response_headers.push("Connection: close\r\n");
+        }
 
         match request.path.as_str() {
-            "/" => write_response(&stream, "200 OK", None, vec![])?,
+            "/" => write_response(&stream, "200 OK", None, response_headers)?,
             s if s.starts_with("/echo/") => {
                 let requested_encoding = request
                     .headers
@@ -53,7 +58,6 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                     .map(|s| s.as_str())
                     .unwrap_or_default();
 
-                let mut response_headers = vec![];
                 let resp_echo = if requested_encoding.contains("gzip") {
                     response_headers.push("Content-Encoding: gzip\r\n");
                     &compress_string(s.strip_prefix("/echo/").unwrap_or_default())?
@@ -67,7 +71,7 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
                 &stream,
                 "200 OK",
                 request.headers.get("User-Agent").map(|s| s.as_bytes()),
-                vec![],
+                response_headers,
             )?,
             s if s.starts_with("/files/") => {
                 let file_name = s.strip_prefix("/files/").unwrap();
@@ -75,26 +79,29 @@ fn handle_connection(stream: TcpStream, directory: String) -> io::Result<()> {
 
                 match request.method.as_str() {
                     "GET" => match fs::read_to_string(fp) {
-                        Ok(contents) => write_response(
-                            &stream,
-                            "200 OK",
-                            Some(contents.as_bytes()),
-                            vec!["Content-Type: application/octet-stream\r\n"],
-                        )?,
-                        Err(_) => write_response(&stream, "404 Not Found", None, vec![])?,
+                        Ok(contents) => {
+                            response_headers.push("Content-Type: application/octet-stream\r\n");
+                            write_response(
+                                &stream,
+                                "200 OK",
+                                Some(contents.as_bytes()),
+                                response_headers,
+                            )?
+                        }
+                        Err(_) => write_response(&stream, "404 Not Found", None, response_headers)?,
                     },
                     "POST" => {
                         println!("body: {}", request.body);
                         fs::write(fp, request.body)?;
                         println!("wrote new file");
-                        write_response(&stream, "201 Created", None, vec![])?
+                        write_response(&stream, "201 Created", None, response_headers)?
                     }
-                    _ => write_response(&stream, "404 Not Found", None, vec![])?,
+                    _ => write_response(&stream, "404 Not Found", None, response_headers)?,
                 }
             }
-            _ => write_response(&stream, "404 Not Found", None, vec![])?,
+            _ => write_response(&stream, "404 Not Found", None, response_headers)?,
         }
-        if request.headers.get("Connection") == Some(&"closed".to_string()) {
+        if close_conn {
             return Ok(());
         }
     }
@@ -108,6 +115,7 @@ fn write_response(
 ) -> io::Result<()> {
     let status_line = format!("HTTP/1.1 {}\r\n", status);
     stream.write_all(status_line.as_bytes())?;
+    println!("response headers: {:?}", headers);
 
     if let Some(txt) = body {
         stream.write_all(
